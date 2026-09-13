@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+n8n_bus_workflow.local.json
+
+# Singapore Public Transport symbol (trademarked/non-free mark) and the
+# pixel-art icons derived from it — personal-use only, not for publishing.
+# See README.md. Regenerate locally via generate_transport_icon.py if
+# you have your own copy of the source image.
+icon.jpeg
+icons/transport_icon_8.gif
+icons/transport_icon_16.gif
