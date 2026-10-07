@@ -3,7 +3,9 @@
 Shows next-arrival times for bus services **102** and **136** at the bus
 stop outside **Blk 477A, Upper Serangoon Road** (bus stop code `64409`,
 confirmed live — both services appear in that stop's arrival data) on two
-Ulanzi pixel clocks.
+Ulanzi pixel clocks: a TC001 (32×8) running AWTRIX NG and a TC002 (52×16)
+running either AWTRIX NG or the stock Ulanzi firmware. Change the stop and
+services in the config to use it anywhere in Singapore.
 
 ## Is there an SMRT app / public API for this?
 
@@ -45,19 +47,21 @@ free, no-key proxy in front of the same underlying API — no manual
 intervention needed, it just logs a warning and keeps the display running
 off the mirror until LTA is reachable again.
 
-## The two clocks run different firmware
+## Supported clocks
 
-Both were probed live before writing the push logic — they are **not**
-the same:
+Each clock needs its own push format. `bus_feeder.py` takes the kind per clock
+in `CLOCKS`; for n8n, import the workflow file that matches your TC002:
 
-| IP | Firmware | Push API |
-|---|---|---|
-| `10.0.20.30` | AWTRIX NG (a TC001, same as the sibling `Ulanzi Feeder` repo) | `PUT /api/v1/apps/pushed/<name>` JSON `{"text", "durationMs", "textCase"}`, `DELETE /api/v1/apps/<name>` to clear |
-| `10.0.20.31` | TC002 native firmware | `POST /api/custom?name=<name>` JSON `{"duration", "text":[...]}`, `POST` with `{}` body to clear |
+| Clock | `CLOCKS` kind | Push API | n8n workflow |
+|---|---|---|---|
+| TC001 (or any 32×8) on AWTRIX NG | `awtrix` | `PUT /api/v1/apps/pushed/<name>` `{"text", "icon", "durationMs", "textCase"}`, `DELETE /api/v1/apps/<name>` to clear | both |
+| TC002 on AWTRIX NG 1.2.2+ (recommended) | `awtrix_tc002` | same API, sent as a full-panel `layout`: icon in `[0,0,16,16]`, one service per line in `[18,0,34,8]` / `[18,8,34,8]` | `n8n_bus_workflow.json` |
+| TC002 on the stock Ulanzi firmware | `ulanzi_tc002` | `POST /api/custom?name=<name>` `{"duration", "text":[...], "image":[...]}`, `POST {}` to clear | `n8n_bus_workflow.ulanzi-firmware.json` |
 
-`bus_feeder.py` builds one set of "next bus" lines and pushes each in the
-format that clock's firmware expects. If you repoint this at clocks that
-are both the same firmware, trim `CLOCKS`/`PUSHERS` accordingly.
+A TC002 on AWTRIX NG would draw a plain text/icon payload at double size on a
+26×8 grid, hence the `layout`. The stock-firmware path is no longer tested
+against a live clock (the author's TC002 now runs AWTRIX NG) but is kept as it
+worked.
 
 ## Usage
 
@@ -66,7 +70,7 @@ python3 -m venv venv && venv/bin/pip install -r requirements.txt
 
 venv/bin/python3 bus_feeder.py --once     # single push, then exit
 venv/bin/python3 bus_feeder.py            # poll loop (every 30s by default)
-venv/bin/python3 bus_feeder.py --clear    # remove the app from both clocks
+venv/bin/python3 bus_feeder.py --clear    # remove the app from every clock
 ```
 
 Config is via environment variables (all optional, shown with defaults):
@@ -75,17 +79,14 @@ Config is via environment variables (all optional, shown with defaults):
 |---|---|---|
 | `BUS_STOP_CODE` | `64409` | Blk 477A Upp Serangoon Rd |
 | `SERVICES` | `102,136` | comma-separated bus service numbers |
-| `APP_NAME` | `sgbus` | app/slot name on both clocks |
+| `CLOCKS` | — (required) | comma-separated `ip=kind` pairs, kind `awtrix`, `awtrix_tc002` or `ulanzi_tc002`, e.g. `192.168.1.30=awtrix,192.168.1.31=awtrix_tc002` |
+| `APP_NAME` | `sgbus` | app/slot name on every clock |
 | `POLL_SECONDS` | `30` | loop interval |
 | `AWTRIX_DURATION_MS` | `8000` | how long the AWTRIX NG clock shows the app per cycle |
-| `TC002_DURATION` | `10` | same, in seconds, for the TC002 clock |
+| `TC002_DURATION` | `10` | same, in seconds, for a TC002 |
 
-Clock IPs and firmware mapping are in the `CLOCKS` dict at the top of
-`bus_feeder.py` (not env-configurable, since the two firmwares need
-different code paths anyway).
-
-`AccountKey` is read from `.env` (via `python-dotenv`) — see **Data
-source** above.
+`AccountKey` and the variables above are read from `.env` (via
+`python-dotenv`) — see **Data source** above.
 
 ## Keeping it running
 
@@ -93,23 +94,20 @@ Two ways to run this on a schedule:
 
 1. **`bus_feeder.py`'s own poll loop** — under `launchd`, `pm2`, or a
    `tmux`/`screen` session.
-2. **n8n** (what's actually deployed): reimplements the exact same fetch
+2. **n8n** (what the author runs): reimplements the exact same fetch
    → normalize → build-lines → push-to-both-clocks pipeline as JS Code
-   nodes, on a **Schedule Trigger (every 30 seconds)**. It's published and
-   **active** on the n8n instance at `n8nurl` (see `.env`) as workflow id
-   `zVyRwmxLbBsNyKU8`, named **"SG Bus - Next Arrival (102/136)"** —
-   verified end-to-end via the n8n API (both clock pushes returned
-   success). LTA DataMall is the primary fetch node, with the same
-   arrivelah2.busrouter.sg fallback wired in via the HTTP node's
-   `onError: continueErrorOutput` branch.
+   nodes, on a **Schedule Trigger (every 30 seconds)**, workflow
+   **"SG Bus - Next Arrival (102/136)"**. LTA DataMall is the primary
+   fetch node, with the same arrivelah2.busrouter.sg fallback wired in
+   via the HTTP node's `onError: continueErrorOutput` branch. Set
+   `CLOCK_IP` (TC001), `CLOCK2_IP` (TC002) and `LTA_ACCOUNT_KEY` in the
+   **Config** node after import.
 
-   Two copies of the workflow file, same convention as the sibling repo's
-   `n8n_aircraft_workflow(.local).json`:
-
-   | File | `LTA_ACCOUNT_KEY` value | Committed to git? |
+   | File | Contents | Committed to git? |
    |---|---|---|
-   | `n8n_bus_workflow.json` | placeholder `PASTE_YOUR_LTA_ACCOUNTKEY` | yes — safe to publish |
-   | `n8n_bus_workflow.local.json` | your real key, embedded | **no** — gitignored |
+   | `n8n_bus_workflow.json` | placeholders, TC002 on AWTRIX NG, no icon | yes — safe to publish |
+   | `n8n_bus_workflow.ulanzi-firmware.json` | placeholders, TC002 on the stock Ulanzi firmware, no icon | yes — safe to publish |
+   | `n8n_bus_workflow.local.json` | your real key, IPs and inline icon | **no** — gitignored |
 
    Import `n8n_bus_workflow.local.json` if you want to re-deploy this
    exact workflow without manually re-pasting the key afterward; import
@@ -140,8 +138,8 @@ Fix: dropped the interval to **30 seconds** (LTA's own feed refreshes
 every 20s, so this stays well within that), capping worst-case staleness
 at half a minute instead of two. It can't be made perfectly live without
 either polling every few seconds (unnecessary API load) or the clock
-firmware supporting an actual countdown timer (neither AWTRIX NG nor
-TC002 do).
+firmware supporting an actual countdown timer (neither AWTRIX NG nor the
+stock TC002 firmware do).
 
 ## Display format
 
@@ -170,14 +168,14 @@ Both clocks show the Singapore Public Transport symbol next to the
 arrival times, generated from a reference photo (`icon.jpeg`) via
 `generate_transport_icon.py`:
 
-- **AWTRIX (`.30`)**: uploaded once to the device's `/ICONS` folder and
+- **TC001 (AWTRIX NG)**: uploaded once to the device's `/ICONS` folder and
   referenced by ID (`icon: "sgpt_wave"`) in every push — AWTRIX has a
   real icon-by-ID system, so `ensure_awtrix_icon()` only uploads it if
   it's missing.
-- **TC002 (`.31`)**: has no icon-by-ID system, so the icon travels as an
-  inline base64 GIF (`image: [...]`) in *every* push, per
-  `TC002-PUSH-NOTES.md` in the sibling repo. Text is shifted to `x: 18` to
-  leave room for the 16px-wide icon column.
+- **TC002**: the 16×16 icon travels inline in *every* push, so nothing
+  has to be uploaded to that clock: as a `data:image/gif;base64,…` URL in
+  the layout's icon box on AWTRIX NG, or in `image[]` on the stock
+  firmware. The text starts at `x: 18` to leave room for it.
 
 **Not committed to git**: this mark is trademarked/non-free (see its own
 [Wikimedia Commons licensing](https://commons.wikimedia.org/wiki/File:Singapore_Public_Transport_logo.jpg)),
@@ -186,8 +184,8 @@ used here only for a personal display. `icon.jpeg`,
 gitignored. If you clone this repo fresh, `bus_feeder.py` will fail on
 the missing icon file until you drop in your own `icon.jpeg` and run
 `python3 generate_transport_icon.py` — or edit `bus_feeder.py` to skip
-the `icon`/`image` fields entirely and ship text-only, which is what the
-public `n8n_bus_workflow.json` template does (no icon reference at all,
+the icon entirely and ship text-only, which is what the public n8n
+templates do (no icon reference at all,
 since there's no safe default to ship).
 
 **Two different generation strategies, one per resolution** — the actual

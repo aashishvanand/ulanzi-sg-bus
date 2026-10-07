@@ -7,10 +7,16 @@ AccountKey from .env. Falls back automatically to arrivelah2.busrouter.sg
 (a free, no-key proxy in front of the same API) if the direct call fails
 for any reason.
 
-The two target clocks run DIFFERENT firmware and need different push APIs:
-  - 10.0.20.30 -> AWTRIX NG   (PUT  /api/v1/apps/pushed/<name>, DELETE to clear)
-  - 10.0.20.31 -> TC002 native (POST /api/custom?name=<name>, {} body to clear)
-Both were probed live against the real devices to confirm this (see README.md).
+Target clocks come from CLOCKS in .env as comma-separated ip=kind pairs, e.g.
+CLOCKS=192.168.1.30=awtrix,192.168.1.31=awtrix_tc002. Each kind needs its own
+push format:
+  - awtrix       -> AWTRIX NG on a 32x8 clock (TC001): PUT /api/v1/apps/pushed/<name>,
+                    DELETE /api/v1/apps/<name> to clear
+  - awtrix_tc002 -> AWTRIX NG on a 52x16 Ulanzi TC002: same API, sent as a
+                    full-panel `layout` (icon box + one text box per service)
+  - ulanzi_tc002 -> TC002 on stock Ulanzi firmware: POST /api/custom?name=<name>,
+                    {} body to clear
+See README.md.
 """
 import base64
 import os
@@ -29,15 +35,27 @@ CONFIG = {
     "APP_NAME": os.environ.get("APP_NAME", "sgbus"),
     "POLL_SECONDS": int(os.environ.get("POLL_SECONDS", "30")),
     "AWTRIX_DURATION_MS": int(os.environ.get("AWTRIX_DURATION_MS", "8000")),
-    "TC002_DURATION": int(os.environ.get("TC002_DURATION", "10")),
+    "TC002_DURATION": int(os.environ.get("TC002_DURATION", "10")),  # seconds
     "LTA_ACCOUNT_KEY": os.environ.get("AccountKey"),
 }
 
-# ip -> firmware ("awtrix" or "tc002")
-CLOCKS = {
-    "10.0.20.30": "awtrix",
-    "10.0.20.31": "tc002",
-}
+KINDS = ("awtrix", "awtrix_tc002", "ulanzi_tc002")
+
+
+def parse_clocks(spec):
+    """'ip=kind,ip=kind' -> {ip: kind}"""
+    clocks = {}
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        ip, _, kind = part.partition("=")
+        if kind not in KINDS:
+            raise SystemExit(f"CLOCKS: unknown kind {kind!r} for {ip!r} (expected one of {', '.join(KINDS)})")
+        clocks[ip.strip()] = kind
+    return clocks
+
+
+CLOCKS = parse_clocks(os.environ.get("CLOCKS", ""))
+if not CLOCKS:
+    raise SystemExit("Set CLOCKS in .env, e.g. CLOCKS=192.168.1.30=awtrix,192.168.1.31=awtrix_tc002")
 
 LTA_BUS_ARRIVAL_URL = "https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival"
 ARRIVELAH_URL = "https://arrivelah2.busrouter.sg/"
@@ -165,7 +183,20 @@ def clear_awtrix(ip):
     requests.delete(url, timeout=5)
 
 
-def push_tc002(ip, lines):
+def push_awtrix_tc002(ip, lines):
+    url = f"http://{ip}/api/v1/apps/pushed/{CONFIG['APP_NAME']}"
+    # The 52x16 panel would draw a plain text/icon payload at double size on a
+    # 26x8 grid, so send a layout: icon in the left 16x16 box, one line per
+    # service to its right. A line too long for its box scrolls through it.
+    regions = [{"id": "icon", "box": [0, 0, 16, 16], "icon": f"data:image/gif;base64,{TC002_ICON_B64}"}]
+    for i, line in enumerate(lines[:2]):
+        regions.append({"id": f"line{i + 1}", "box": [18, 8 * i, 34, 8], "text": line, "color": "#FFFFFF", "align": "start"})
+    payload = {"durationMs": CONFIG["TC002_DURATION"] * 1000, "layout": {"version": 1, "regions": regions}}
+    r = requests.put(url, json=payload, timeout=5)
+    r.raise_for_status()
+
+
+def push_ulanzi_tc002(ip, lines):
     url = f"http://{ip}/api/custom"
     # icon fills the leftmost 16px column (full panel height); text starts after it
     text = [
@@ -182,13 +213,13 @@ def push_tc002(ip, lines):
     r.raise_for_status()
 
 
-def clear_tc002(ip):
+def clear_ulanzi_tc002(ip):
     url = f"http://{ip}/api/custom"
     requests.post(url, params={"name": CONFIG["APP_NAME"]}, json={}, timeout=5)
 
 
-PUSHERS = {"awtrix": push_awtrix, "tc002": push_tc002}
-CLEARERS = {"awtrix": clear_awtrix, "tc002": clear_tc002}
+PUSHERS = {"awtrix": push_awtrix, "awtrix_tc002": push_awtrix_tc002, "ulanzi_tc002": push_ulanzi_tc002}
+CLEARERS = {"awtrix": clear_awtrix, "awtrix_tc002": clear_awtrix, "ulanzi_tc002": clear_ulanzi_tc002}
 
 
 def push_all(lines):
@@ -218,7 +249,7 @@ def run_once():
     # is running) -> remove the app instead of showing a blank "-- / --".
     if all(minutes_by_no.get(no) is None for no in CONFIG["SERVICES"]):
         clear_all()
-        print(f"no scheduled buses (via {source}) — cleared both clocks")
+        print(f"no scheduled buses (via {source}) — cleared all clocks")
         return
 
     lines = build_lines(minutes_by_no)
@@ -229,7 +260,7 @@ def run_once():
 def main():
     if "--clear" in sys.argv:
         clear_all()
-        print("cleared both clocks")
+        print("cleared all clocks")
         return
     ensure_awtrix_icon()
     if "--once" in sys.argv:

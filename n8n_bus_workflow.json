@@ -24,8 +24,8 @@
           "assignments": [
             { "name": "BUS_STOP_CODE", "type": "string", "value": "64409" },
             { "name": "SERVICES", "type": "string", "value": "102,136" },
-            { "name": "CLOCK_IP", "type": "string", "value": "10.0.20.30" },
-            { "name": "CLOCK2_IP", "type": "string", "value": "10.0.20.31" },
+            { "name": "CLOCK_IP", "type": "string", "value": "YOUR_CLOCK_IP" },
+            { "name": "CLOCK2_IP", "type": "string", "value": "YOUR_CLOCK2_IP" },
             { "name": "APP_NAME", "type": "string", "value": "sgbus" },
             { "name": "LTA_ACCOUNT_KEY", "type": "string", "value": "PASTE_YOUR_LTA_ACCOUNTKEY" }
           ]
@@ -133,7 +133,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const lines = $json.lines;\n// No inline icon in this public template (see README.md). If you add\n// one, embed it as base64 in an `image` array and shift x to ~18 to\n// leave room for its 16px-wide column.\nconst text = [\n  { content: lines[0], fontHeight: 5, x: 0, y: 1, color: '#FFFFFF' }\n];\nif (lines.length > 1) {\n  text.push({ content: lines[1], fontHeight: 5, x: 0, y: 9, color: '#FFFFFF' });\n}\nreturn [{ json: { duration: 10, text } }];"
+        "jsCode": "const lines = $json.lines;\n// TC002 runs AWTRIX NG: a `layout` uses the full 52x16 panel (a plain\n// text/icon payload would be drawn at double size on a 26x8 grid). No\n// inline icon in this public template (see README.md). If you add one, put\n// an { id: 'icon', box: [0, 0, 16, 16], icon: 'data:image/gif;base64,...' }\n// region first and move the text boxes to x 18, width 34.\nconst regions = [\n  { id: 'line1', box: [0, 0, 52, 8], text: lines[0], color: '#FFFFFF', align: 'start' },\n];\nif (lines.length > 1) {\n  regions.push({ id: 'line2', box: [0, 8, 52, 8], text: lines[1], color: '#FFFFFF', align: 'start' });\n}\nreturn [{ json: { durationMs: 10000, layout: { version: 1, regions } } }];"
       },
       "name": "Build Payload TC002",
       "type": "n8n-nodes-base.code",
@@ -154,17 +154,8 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/custom?name={{ $('Config (edit per location)').item.json.APP_NAME }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={}"
+        "method": "DELETE",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/{{ $('Config (edit per location)').item.json.APP_NAME }}"
       },
       "name": "Clear Clock 2 (TC002)",
       "type": "n8n-nodes-base.httpRequest",
@@ -194,8 +185,8 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/custom?name={{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "method": "PUT",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/pushed/{{ $('Config (edit per location)').item.json.APP_NAME }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

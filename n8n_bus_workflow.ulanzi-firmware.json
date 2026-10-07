@@ -1,0 +1,263 @@
+{
+  "name": "SG Bus - Next Arrival (102/136, TC002 on Ulanzi firmware)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "name": "Every 30s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-1400, 0],
+      "id": "fce134bd-7655-40e1-819d-7d3497fa890c"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "BUS_STOP_CODE", "type": "string", "value": "64409" },
+            { "name": "SERVICES", "type": "string", "value": "102,136" },
+            { "name": "CLOCK_IP", "type": "string", "value": "YOUR_CLOCK_IP" },
+            { "name": "CLOCK2_IP", "type": "string", "value": "YOUR_CLOCK2_IP" },
+            { "name": "APP_NAME", "type": "string", "value": "sgbus" },
+            { "name": "LTA_ACCOUNT_KEY", "type": "string", "value": "PASTE_YOUR_LTA_ACCOUNTKEY" }
+          ]
+        }
+      },
+      "name": "Config (edit per location)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-1200, 0],
+      "id": "51b9087c-80fe-40e9-9d34-0e6738795298"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode={{ $json.BUS_STOP_CODE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "AccountKey", "value": "={{ $json.LTA_ACCOUNT_KEY }}" },
+            { "name": "accept", "value": "application/json" }
+          ]
+        }
+      },
+      "name": "Fetch LTA Bus Arrival",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
+      "position": [-1000, 0],
+      "id": "bfc30340-ae9a-4c41-a01a-e14489f338a9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst services = data.Services || [];\nconst minutesByNo = {};\nfor (const svc of services) {\n  const iso = svc.NextBus && svc.NextBus.EstimatedArrival;\n  let mins = null;\n  if (iso) {\n    const arrival = new Date(iso);\n    mins = Math.max(0, Math.round((arrival - new Date()) / 60000));\n  }\n  minutesByNo[svc.ServiceNo] = mins;\n}\nreturn [{ json: { minutesByNo, source: 'lta' } }];"
+      },
+      "name": "Normalize LTA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-800, -120],
+      "id": "d716ca94-5de8-4301-8930-93e823ab26fe"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://arrivelah2.busrouter.sg/?id={{ $('Config (edit per location)').item.json.BUS_STOP_CODE }}"
+      },
+      "name": "Fetch Arrivelah (fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-800, 160],
+      "id": "c7e5334f-3708-4ee4-b750-3e8b807920c9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst services = data.services || [];\nconst minutesByNo = {};\nfor (const svc of services) {\n  const ms = svc.next && svc.next.duration_ms;\n  minutesByNo[svc.no] = (ms === undefined || ms === null) ? null : Math.max(0, Math.round(ms / 60000));\n}\nreturn [{ json: { minutesByNo, source: 'arrivelah' } }];"
+      },
+      "name": "Normalize Arrivelah",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-600, 160],
+      "id": "688d262e-6138-4db3-b3fa-00e29780b723"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config (edit per location)').item.json;\nconst services = cfg.SERVICES.split(',').map(s => s.trim());\nconst minutesByNo = $json.minutesByNo;\n\nfunction label(no) {\n  const mins = minutesByNo[no];\n  if (mins === null || mins === undefined) return `${no} --`;\n  if (mins === 0) return `${no} ARR`;\n  return `${no} ${mins}MIN`;\n}\n\nconst hasAnyData = services.some(no => minutesByNo[no] !== null && minutesByNo[no] !== undefined);\nconst lines = services.map(label);\nreturn [{ json: { lines, source: $json.source, hasAnyData } }];"
+      },
+      "name": "Build Lines",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 0],
+      "id": "d0edf893-6685-4ccd-a919-076b7b02352a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasAnyData }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Any Bus Scheduled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-320, 0],
+      "id": "a1b2c3d4-1111-4a2b-9c3d-4e5f6a7b8c9d"
+    },
+    {
+      "parameters": {
+        "jsCode": "const lines = $json.lines;\n// No icon in this public template (see README.md — the deployed icon is\n// a trademarked mark, gitignored, not shippable here). Add `icon: '<id>'`\n// once you've uploaded your own icon to the AWTRIX clock's /ICONS folder.\nreturn [{ json: {\n  text: lines.join('  '),\n  durationMs: 8000,\n  textCase: 'asTyped'\n} }];"
+      },
+      "name": "Build Payload AWTRIX",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, -160],
+      "id": "12e93365-367e-443c-a4a4-a6cc7a1a1026"
+    },
+    {
+      "parameters": {
+        "jsCode": "const lines = $json.lines;\n// No inline icon in this public template (see README.md). If you add\n// one, embed it as base64 in an `image` array and shift x to ~18 to\n// leave room for its 16px-wide column.\nconst text = [\n  { content: lines[0], fontHeight: 5, x: 0, y: 1, color: '#FFFFFF' }\n];\nif (lines.length > 1) {\n  text.push({ content: lines[1], fontHeight: 5, x: 0, y: 9, color: '#FFFFFF' });\n}\nreturn [{ json: { duration: 10, text } }];"
+      },
+      "name": "Build Payload TC002",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, 120],
+      "id": "93f15261-669e-4a0e-a16a-7884c5e436db"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/{{ $('Config (edit per location)').item.json.APP_NAME }}"
+      },
+      "name": "Clear Clock (AWTRIX)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-200, 300],
+      "id": "b2c3d4e5-2222-4b3c-8d4e-5f6a7b8c9d0e"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/custom?name={{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={}"
+      },
+      "name": "Clear Clock 2 (TC002)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-200, 420],
+      "id": "c3d4e5f6-3333-4c4d-9e5f-6a7b8c9d0e1f"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/pushed/{{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Push to Clock (AWTRIX)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, -120],
+      "id": "e425d31b-3045-4ff6-8fea-a5590a9422ce"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/custom?name={{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Push to Clock 2 (TC002)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, 160],
+      "id": "13dd26f7-a36c-4e42-986a-a8c2d4ca1c50"
+    }
+  ],
+  "connections": {
+    "Every 30s": {
+      "main": [[{ "node": "Config (edit per location)", "type": "main", "index": 0 }]]
+    },
+    "Config (edit per location)": {
+      "main": [[{ "node": "Fetch LTA Bus Arrival", "type": "main", "index": 0 }]]
+    },
+    "Fetch LTA Bus Arrival": {
+      "main": [
+        [{ "node": "Normalize LTA", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Arrivelah (fallback)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Normalize LTA": {
+      "main": [[{ "node": "Build Lines", "type": "main", "index": 0 }]]
+    },
+    "Fetch Arrivelah (fallback)": {
+      "main": [[{ "node": "Normalize Arrivelah", "type": "main", "index": 0 }]]
+    },
+    "Normalize Arrivelah": {
+      "main": [[{ "node": "Build Lines", "type": "main", "index": 0 }]]
+    },
+    "Build Lines": {
+      "main": [[{ "node": "Any Bus Scheduled?", "type": "main", "index": 0 }]]
+    },
+    "Any Bus Scheduled?": {
+      "main": [
+        [
+          { "node": "Build Payload AWTRIX", "type": "main", "index": 0 },
+          { "node": "Build Payload TC002", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Clear Clock (AWTRIX)", "type": "main", "index": 0 },
+          { "node": "Clear Clock 2 (TC002)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Payload AWTRIX": {
+      "main": [[{ "node": "Push to Clock (AWTRIX)", "type": "main", "index": 0 }]]
+    },
+    "Build Payload TC002": {
+      "main": [[{ "node": "Push to Clock 2 (TC002)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
