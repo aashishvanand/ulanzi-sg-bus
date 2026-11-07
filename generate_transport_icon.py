@@ -21,6 +21,7 @@ Outputs:
   icons/transport_icon_16.gif  - 16x16, for TC002
 """
 import os
+
 from PIL import Image
 
 SRC = os.path.join(os.path.dirname(__file__), "icon.jpeg")
@@ -54,7 +55,7 @@ def load_mask():
     bg_sample = img.getpixel((2, 2))  # corner pixel = background teal
 
     def is_foreground(px):
-        dist = sum((a - b) ** 2 for a, b in zip(px, bg_sample)) ** 0.5
+        dist = sum((a - b) ** 2 for a, b in zip(px, bg_sample, strict=True)) ** 0.5
         return dist > 60
 
     mask = Image.new("L", (w, h), 0)
@@ -118,8 +119,8 @@ def render(size, preserve_aspect=True):
     for y in range(size):
         for x in range(size):
             r, g, b = px[x, y]
-            dist_mark = sum((v - m) ** 2 for v, m in zip((r, g, b), MARK_COLOR))
-            dist_bg = sum((v - m) ** 2 for v, m in zip((r, g, b), BG))
+            dist_mark = sum((v - m) ** 2 for v, m in zip((r, g, b), MARK_COLOR, strict=True))
+            dist_bg = sum((v - m) ** 2 for v, m in zip((r, g, b), BG, strict=True))
             if dist_mark < dist_bg:
                 out[x, y] = MARK_COLOR
     return binary.quantize(colors=2, dither=Image.Dither.NONE)

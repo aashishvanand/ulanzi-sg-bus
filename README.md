@@ -41,7 +41,8 @@ different credential for ERP2.0 on-board-unit telematics — unrelated to
 Bus Arrival, not used here.)
 
 **Automatic fallback:** if the direct LTA call fails for any reason (key
-revoked, LTA outage, network issue), the script falls back to
+revoked, LTA outage, network issue, or a response with no `Services`
+list), the script falls back to
 **[arrivelah2.busrouter.sg](https://github.com/cheeaun/arrivelah)**, a
 free, no-key proxy in front of the same underlying API — no manual
 intervention needed, it just logs a warning and keeps the display running
@@ -73,6 +74,11 @@ venv/bin/python3 bus_feeder.py            # poll loop (every 30s by default)
 venv/bin/python3 bus_feeder.py --clear    # remove the app from every clock
 ```
 
+Config is validated at startup: a malformed `BUS_STOP_CODE`, `SERVICES`,
+`APP_NAME`, `CLOCKS` entry or `QUIET_HOURS` exits with an error saying which
+one is wrong. Missing icon files are not an error; the clock just gets a
+push with no icon.
+
 Config is via environment variables (all optional, shown with defaults):
 
 | Var | Default | Meaning |
@@ -84,6 +90,7 @@ Config is via environment variables (all optional, shown with defaults):
 | `POLL_SECONDS` | `30` | loop interval |
 | `AWTRIX_DURATION_MS` | `8000` | how long the AWTRIX NG clock shows the app per cycle |
 | `TC002_DURATION` | `10` | same, in seconds, for a TC002 |
+| `QUIET_HOURS` | — (off) | e.g. `01:00-05:30` (local time, may cross midnight): clear the clocks once and skip LTA calls inside the window |
 
 `AccountKey` and the variables above are read from `.env` (via
 `python-dotenv`) — see **Data source** above.
@@ -93,29 +100,43 @@ Config is via environment variables (all optional, shown with defaults):
 Two ways to run this on a schedule:
 
 1. **`bus_feeder.py`'s own poll loop** — under `launchd`, `pm2`, or a
-   `tmux`/`screen` session.
+   `tmux`/`screen` session. Log lines are timestamped and flushed
+   immediately, so they show up in launchd/pm2 logs. Stopping it with
+   SIGTERM (what launchd and pm2 send) or Ctrl-C clears the clocks first.
+   A bad response or a dead clock logs a warning and the loop keeps
+   going; clocks are pushed in parallel with a 3 s timeout each.
 2. **n8n** (what the author runs): reimplements the exact same fetch
    → normalize → build-lines → push-to-both-clocks pipeline as JS Code
    nodes, on a **Schedule Trigger (every 30 seconds)**, workflow
    **"SG Bus - Next Arrival (102/136)"**. LTA DataMall is the primary
    fetch node, with the same arrivelah2.busrouter.sg fallback wired in
-   via the HTTP node's `onError: continueErrorOutput` branch. Set
-   `CLOCK_IP` (TC001), `CLOCK2_IP` (TC002) and `LTA_ACCOUNT_KEY` in the
-   **Config** node after import.
+   via the HTTP node's `onError: continueErrorOutput` branch (also taken
+   when LTA answers without a `Services` list). Every HTTP node has a
+   timeout (8 s for the APIs, 3 s for the clocks), so a hung request can't
+   pile up executions behind the 30 s trigger. The fetch nodes retry once.
+   A failed clear (e.g. app already gone) doesn't fail the run.
+
+   After import:
+   - Set `CLOCK_IP` (TC001) and `CLOCK2_IP` (TC002) in the **Config** node.
+   - The LTA key is **not** stored in the workflow. Create an n8n
+     credential of type **Header Auth** with name `AccountKey` and your
+     key as the value, then select it on the **Fetch LTA Bus Arrival**
+     node (it shows a credential warning until you do). This keeps the
+     key out of exports and out of anything that can read the workflow.
+   - Leave **Available in MCP** off for this workflow; nothing needs it.
 
    | File | Contents | Committed to git? |
    |---|---|---|
    | `n8n_bus_workflow.json` | placeholders, TC002 on AWTRIX NG, no icon | yes — safe to publish |
    | `n8n_bus_workflow.ulanzi-firmware.json` | placeholders, TC002 on the stock Ulanzi firmware, no icon | yes — safe to publish |
-   | `n8n_bus_workflow.local.json` | your real key, IPs and inline icon | **no** — gitignored |
+   | `n8n_bus_workflow.local.json` | your real IPs and inline icon (key lives in the n8n credential) | **no** — gitignored |
 
    Import `n8n_bus_workflow.local.json` if you want to re-deploy this
-   exact workflow without manually re-pasting the key afterward; import
-   `n8n_bus_workflow.json` (and paste your key into the **Config** node
-   yourself) if you're publishing/sharing the repo. Regenerate the
-   `.local.json` any time the public one changes by copying it and
-   substituting your key in the `Config (edit per location)` node's
-   `LTA_ACCOUNT_KEY` assignment. Change the interval on the **Every 30s**
+   exact workflow with your IPs and icon already filled in; import
+   `n8n_bus_workflow.json` if you're starting fresh. Either way, pick
+   the Header Auth credential on the LTA node after import. Regenerate
+   the `.local.json` any time the public one changes by copying it and
+   substituting your clock IPs. Change the interval on the **Every 30s**
    node if you want a different polling cadence.
 
 ### Why the clock sometimes reads a couple minutes off from MyTransport
@@ -215,3 +236,24 @@ icon id (`transport_icon` → `sgpt_mark` → `sgpt_wave`) rather than
 re-uploading under the same name. If you regenerate this icon again,
 bump `AWTRIX_ICON_NAME` (and the matching reference in
 `n8n_bus_workflow.local.json`) again too.
+
+## Network
+
+The clocks' HTTP APIs (AWTRIX NG and the stock Ulanzi firmware) have no
+authentication or TLS: anything that can reach a clock on the network can
+overwrite or clear its apps and upload files. Keep the clocks on an
+isolated IoT VLAN, and firewall it so only the host running
+`bus_feeder.py`/n8n can reach them on port 80 (and 7001 for the stock
+firmware).
+
+## Development
+
+```bash
+venv/bin/pip install -r requirements-dev.txt
+venv/bin/ruff check . --exclude venv
+venv/bin/pytest -q
+venv/bin/pip-audit -r requirements.txt
+```
+
+CI (`.github/workflows/ci.yml`) runs the same checks and also fails if a
+committed n8n template is invalid JSON or still has an `LTA_ACCOUNT_KEY` field.

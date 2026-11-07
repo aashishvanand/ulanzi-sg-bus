@@ -26,8 +26,7 @@
             { "name": "SERVICES", "type": "string", "value": "102,136" },
             { "name": "CLOCK_IP", "type": "string", "value": "YOUR_CLOCK_IP" },
             { "name": "CLOCK2_IP", "type": "string", "value": "YOUR_CLOCK2_IP" },
-            { "name": "APP_NAME", "type": "string", "value": "sgbus" },
-            { "name": "LTA_ACCOUNT_KEY", "type": "string", "value": "PASTE_YOUR_LTA_ACCOUNTKEY" }
+            { "name": "APP_NAME", "type": "string", "value": "sgbus" }
           ]
         }
       },
@@ -40,46 +39,57 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode={{ $json.BUS_STOP_CODE }}",
+        "url": "=https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode={{ encodeURIComponent($json.BUS_STOP_CODE) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "AccountKey", "value": "={{ $json.LTA_ACCOUNT_KEY }}" },
             { "name": "accept", "value": "application/json" }
           ]
-        }
+        },
+        "options": { "timeout": 8000 }
       },
       "name": "Fetch LTA Bus Arrival",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
       "position": [-1000, 0],
       "id": "bfc30340-ae9a-4c41-a01a-e14489f338a9"
     },
     {
       "parameters": {
-        "jsCode": "const data = $json;\nconst services = data.Services || [];\nconst minutesByNo = {};\nfor (const svc of services) {\n  const iso = svc.NextBus && svc.NextBus.EstimatedArrival;\n  let mins = null;\n  if (iso) {\n    const arrival = new Date(iso);\n    mins = Math.max(0, Math.round((arrival - new Date()) / 60000));\n  }\n  minutesByNo[svc.ServiceNo] = mins;\n}\nreturn [{ json: { minutesByNo, source: 'lta' } }];"
+        "jsCode": "const data = $json;\nif (!Array.isArray(data.Services)) throw new Error('LTA response has no Services list');\nconst services = data.Services;\nconst minutesByNo = {};\nfor (const svc of services) {\n  if (!svc || !svc.ServiceNo) continue;\n  const iso = svc.NextBus && svc.NextBus.EstimatedArrival;\n  let mins = null;\n  if (iso) {\n    const arrival = new Date(iso);\n    mins = Math.max(0, Math.round((arrival - new Date()) / 60000));\n  }\n  minutesByNo[svc.ServiceNo] = mins;\n}\nreturn [{ json: { minutesByNo, source: 'lta' } }];"
       },
       "name": "Normalize LTA",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
+      "onError": "continueErrorOutput",
       "position": [-800, -120],
       "id": "d716ca94-5de8-4301-8930-93e823ab26fe"
     },
     {
       "parameters": {
         "method": "GET",
-        "url": "=https://arrivelah2.busrouter.sg/?id={{ $('Config (edit per location)').item.json.BUS_STOP_CODE }}"
+        "url": "=https://arrivelah2.busrouter.sg/?id={{ encodeURIComponent($('Config (edit per location)').item.json.BUS_STOP_CODE) }}",
+        "options": { "timeout": 8000 }
       },
       "name": "Fetch Arrivelah (fallback)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
       "position": [-800, 160],
       "id": "c7e5334f-3708-4ee4-b750-3e8b807920c9"
     },
     {
       "parameters": {
-        "jsCode": "const data = $json;\nconst services = data.services || [];\nconst minutesByNo = {};\nfor (const svc of services) {\n  const ms = svc.next && svc.next.duration_ms;\n  minutesByNo[svc.no] = (ms === undefined || ms === null) ? null : Math.max(0, Math.round(ms / 60000));\n}\nreturn [{ json: { minutesByNo, source: 'arrivelah' } }];"
+        "jsCode": "const data = $json;\nif (!Array.isArray(data.services)) throw new Error('arrivelah response has no services list');\nconst services = data.services;\nconst minutesByNo = {};\nfor (const svc of services) {\n  if (!svc || !svc.no) continue;\n  const ms = svc.next && svc.next.duration_ms;\n  minutesByNo[svc.no] = (ms === undefined || ms === null) ? null : Math.max(0, Math.round(ms / 60000));\n}\nreturn [{ json: { minutesByNo, source: 'arrivelah' } }];"
       },
       "name": "Normalize Arrivelah",
       "type": "n8n-nodes-base.code",
@@ -144,29 +154,33 @@
     {
       "parameters": {
         "method": "DELETE",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/{{ $('Config (edit per location)').item.json.APP_NAME }}"
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/{{ encodeURIComponent($('Config (edit per location)').item.json.APP_NAME) }}",
+        "options": { "timeout": 3000 }
       },
       "name": "Clear Clock (AWTRIX)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
       "position": [-200, 300],
       "id": "b2c3d4e5-2222-4b3c-8d4e-5f6a7b8c9d0e"
     },
     {
       "parameters": {
         "method": "DELETE",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/{{ $('Config (edit per location)').item.json.APP_NAME }}"
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/{{ encodeURIComponent($('Config (edit per location)').item.json.APP_NAME) }}",
+        "options": { "timeout": 3000 }
       },
       "name": "Clear Clock 2 (TC002)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
       "position": [-200, 420],
       "id": "c3d4e5f6-3333-4c4d-9e5f-6a7b8c9d0e1f"
     },
     {
       "parameters": {
         "method": "PUT",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/pushed/{{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK_IP }}/api/v1/apps/pushed/{{ encodeURIComponent($('Config (edit per location)').item.json.APP_NAME) }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -175,7 +189,8 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}"
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 3000 }
       },
       "name": "Push to Clock (AWTRIX)",
       "type": "n8n-nodes-base.httpRequest",
@@ -186,7 +201,7 @@
     {
       "parameters": {
         "method": "PUT",
-        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/pushed/{{ $('Config (edit per location)').item.json.APP_NAME }}",
+        "url": "=http://{{ $('Config (edit per location)').item.json.CLOCK2_IP }}/api/v1/apps/pushed/{{ encodeURIComponent($('Config (edit per location)').item.json.APP_NAME) }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -195,7 +210,8 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}"
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 3000 }
       },
       "name": "Push to Clock 2 (TC002)",
       "type": "n8n-nodes-base.httpRequest",
@@ -218,7 +234,10 @@
       ]
     },
     "Normalize LTA": {
-      "main": [[{ "node": "Build Lines", "type": "main", "index": 0 }]]
+      "main": [
+        [{ "node": "Build Lines", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Arrivelah (fallback)", "type": "main", "index": 0 }]
+      ]
     },
     "Fetch Arrivelah (fallback)": {
       "main": [[{ "node": "Normalize Arrivelah", "type": "main", "index": 0 }]]
